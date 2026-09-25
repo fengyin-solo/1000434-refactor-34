@@ -14,9 +14,11 @@
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
-        <strong class="stat-value">{{ item.value }}</strong>
+        <strong class="stat-value">{{ item.value ?? '—' }}</strong>
+        <span v-if="item.unit" class="stat-unit">{{ item.unit }}</span>
       </article>
     </div>
+    <p v-if="statsNote" class="stats-note">{{ statsNote }}</p>
 
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
@@ -38,15 +40,18 @@
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td class="row-actions">
-            <button
-              v-for="action in actions"
-              :key="action"
-              class="link"
-              type="button"
-              @click="runAction(action, row)"
-            >
-              {{ action }}
-            </button>
+            <template v-if="allowedActions(row).length">
+              <button
+                v-for="action in allowedActions(row)"
+                :key="action"
+                class="link"
+                type="button"
+                @click="runAction(action, row)"
+              >
+                {{ action }}
+              </button>
+            </template>
+            <span v-else class="muted-text">无可执行动作</span>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -67,19 +72,38 @@ import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | null | string[]>
+type StatItem = { label: string; value: number | null; unit?: string }
+type StatsPayload = {
+  month: string
+  month_power: number | null
+  water_power: number | null
+  chemical_consumption: number | null
+  count: number
+  note: string
+}
 
 const ENDPOINT = '/api/energy'
 const columns = ["记录编号", "统计日期", "用电量", "单位电耗", "药剂单耗", "吨水电耗", "记录人员", "记录状态"]
 const actions = ["提交填报", "复核确认", "标记争议"]
-const statuses = ["待填报", "已填报", "已复核", "有争议"]
-const stats = [{"label": "本月用电量", "value": 0}, {"label": "吨水电耗均值", "value": 0}, {"label": "药剂单耗", "value": 0}]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+// 统计卡片与列表同源，由后端 /api/energy/stats 按共用口径返回；空数据时后端给 null。
+const stats = ref<StatItem[]>([
+  { label: '本月用电量', value: null, unit: 'kWh' },
+  { label: '吨水电耗均值', value: null, unit: 'kWh/t' },
+  { label: '药剂单耗', value: null, unit: 'kg/t' },
+])
+const statsNote = ref('')
+
+function allowedActions(row: Row): string[] {
+  const list = row.actions
+  return Array.isArray(list) ? (list as string[]) : actions
+}
 
 function resetFilters() {
   filters.value = {}
@@ -101,10 +125,13 @@ async function runAction(action: string, row: Row) {
       method: 'POST',
       body: JSON.stringify({ action }),
     })
-    if (!response.ok) {
-      throw new Error('能耗管理动作未生效，请稍后重试')
+    // 重复填报、重复复核这类业务拦截后端以 200 + ok:false 返回，
+    // 必须把 message 展示出来，不能静默留在原状态。
+    const payload = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null
+    if (!response.ok || !payload?.ok) {
+      throw new Error(payload?.message || '能耗管理动作未生效，请稍后重试')
     }
-    await reload()
+    await Promise.all([reload(), loadStats()])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '能耗管理操作失败'
   }
@@ -126,5 +153,26 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+async function loadStats() {
+  try {
+    const response = await request(`${ENDPOINT}/stats`)
+    if (!response.ok) {
+      throw new Error('统计读取失败')
+    }
+    const payload = (await response.json()) as StatsPayload
+    stats.value = [
+      { label: '本月用电量', value: payload.month_power, unit: 'kWh' },
+      { label: '吨水电耗均值', value: payload.water_power, unit: 'kWh/t' },
+      { label: '药剂单耗', value: payload.chemical_consumption, unit: 'kg/t' },
+    ]
+    statsNote.value = payload.note
+  } catch {
+    statsNote.value = '统计卡片暂时读取失败，列表数据不受影响'
+  }
+}
+
+onMounted(() => {
+  void reload()
+  void loadStats()
+})
 </script>
