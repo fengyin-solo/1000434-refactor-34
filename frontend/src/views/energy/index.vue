@@ -17,6 +17,7 @@
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
     </div>
+    <p v-if="statsMessage" class="stats-note">{{ statsMessage }}</p>
 
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
@@ -68,15 +69,19 @@ import { onMounted, ref } from 'vue'
 import { request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
+type Card = { label: string; value: number }
 
 const ENDPOINT = '/api/energy'
-const columns = ["记录编号", "统计日期", "用电量", "单位电耗", "药剂单耗", "吨水电耗", "记录人员", "记录状态"]
+// 列顺序以后端 /api/energy 返回口径为准：原始量在前，派生指标由后端统一现算。
+const columns = ["记录编号", "统计日期", "用电量", "处理水量", "单位电耗", "药剂用量", "药剂单耗", "吨水电耗", "记录人员", "记录状态"]
 const actions = ["提交填报", "复核确认", "标记争议"]
 const statuses = ["待填报", "已填报", "已复核", "有争议"]
-const stats = [{"label": "本月用电量", "value": 0}, {"label": "吨水电耗均值", "value": 0}, {"label": "药剂单耗", "value": 0}]
+const fallbackStats: Card[] = [{"label": "本月用电量", "value": 0}, {"label": "吨水电耗均值", "value": 0}, {"label": "药剂单耗", "value": 0}]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = ref<Card[]>(fallbackStats)
+const statsMessage = ref('')
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
@@ -101,10 +106,14 @@ async function runAction(action: string, row: Row) {
       method: 'POST',
       body: JSON.stringify({ action }),
     })
-    if (!response.ok) {
-      throw new Error('能耗管理动作未生效，请稍后重试')
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; message?: string }
+      | null
+    // 重复复核、未填报先复核等被后端拦下时，展示后端给出的口径说明。
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.message || '能耗管理动作未生效，请稍后重试')
     }
-    await reload()
+    await Promise.all([reload(), loadStats()])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '能耗管理操作失败'
   }
@@ -126,5 +135,24 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+async function loadStats() {
+  // 卡片数字来自后端 stats 口径，和表格、导出共用同一套派生指标，避免页面数字不一致。
+  try {
+    const response = await request(`${ENDPOINT}/stats`)
+    if (!response.ok) {
+      throw new Error('统计卡片读取失败')
+    }
+    const payload = await response.json()
+    stats.value = payload.cards ?? fallbackStats
+    statsMessage.value = payload.message ?? ''
+  } catch (error) {
+    stats.value = fallbackStats
+    statsMessage.value = error instanceof Error ? error.message : '统计卡片读取失败'
+  }
+}
+
+onMounted(() => {
+  void reload()
+  void loadStats()
+})
 </script>

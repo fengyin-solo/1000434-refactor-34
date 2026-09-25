@@ -1,19 +1,18 @@
 """能耗管理接口：维护能耗记录，覆盖提交填报、复核确认、标记争议等动作。"""
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services import energy_caliber as caliber
 from app.services.energy import EnergyService
 
 router = APIRouter(prefix="/api/energy", tags=["能耗管理"])
 
 service = EnergyService()
 
-LIST_FIELDS = ["记录编号", "统计日期", "用电量", "单位电耗", "药剂单耗", "吨水电耗", "记录人员", "记录状态"]
-STATUSES = ["待填报", "已填报", "已复核", "有争议"]
+LIST_FIELDS = caliber.LIST_FIELDS
+STATUSES = caliber.STATUSES
 
 
 @router.get("", response_model=PageResult[dict])
@@ -28,6 +27,19 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats")
+def stats() -> dict:
+    """统计卡片：本月用电量、吨水电耗均值、药剂单耗，与列表共用同一套口径。"""
+    return service.summary()
+
+
+@router.get("/export")
+def export_entries() -> dict:
+    """导出能耗管理清单：返回当前过滤条件下的全量数据（含按口径派生的指标列）。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": caliber.MODULE, "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +62,9 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条能耗记录执行提交填报、复核确认、标记争议；不允许的动作会被拦下并说明原因。"""
+    """对单条能耗记录执行提交填报、复核确认、标记争议；重复复核等情况拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出能耗管理清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "energy", "total": total, "items": items}

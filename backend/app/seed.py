@@ -1,7 +1,50 @@
 """示例数据：每个模块给几条不同状态的记录，方便起服务后立刻看到内容。"""
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
+
+from app.services import energy_caliber as energy_caliber
+
+
+def _energy_seed_rows() -> list[dict[str, Any]]:
+    """能耗示例数据：数值与日期都按 energy_caliber 的口径给真值。
+
+    日期锚定当前月份，保证任何时候起服务，「本月」卡片都有数据可验证；
+    派生指标（单位电耗/吨水电耗/药剂单耗）不在此写死，由共用口径现算，
+    避免示例值和统计卡片各算各的。
+    """
+    today = date.today()
+    month = today.month
+    year = today.year
+
+    def d(day: int) -> str:
+        return date(year, month, day).strftime("%Y-%m-%d")
+
+    samples = [
+        # (id, 状态, pending, abnormal, 日, 用电量kWh, 处理水量吨, 药剂kg, 记录人员)
+        (1, energy_caliber.STATUS_DRAFT, True, False, 8, 18200, 49000, 96, "待填报草稿，不计入卡片"),
+        (2, energy_caliber.STATUS_FILLED, True, False, 9, 18650, 50200, 102, "王莉"),
+        (3, energy_caliber.STATUS_REVIEWED, False, False, 10, 17980, 48700, 98, "王莉"),
+        (4, energy_caliber.STATUS_DISPUTED, True, True, 11, 19050, 50100, 105, "陈强"),
+        (5, energy_caliber.STATUS_REVIEWED, False, False, 12, 18420, 49500, 99, "陈强"),
+    ]
+    rows: list[dict[str, Any]] = []
+    for row_id, status, pending, abnormal, day, power, water, chem, operator in samples:
+        rows.append({
+            "id": row_id,
+            "status": status,
+            "pending": pending,
+            "abnormal": abnormal,
+            energy_caliber.KEY_FIELD: f"ENER-{row_id:04d}",
+            energy_caliber.DATE_FIELD: d(day),
+            energy_caliber.POWER_FIELD: power,
+            energy_caliber.WATER_FIELD: water,
+            energy_caliber.CHEM_FIELD: chem,
+            energy_caliber.OPERATOR_FIELD: operator,
+        })
+    return rows
+
 
 SEED_ROWS: dict[str, list[dict[str, Any]]] = {
     "plant": [{'id': 1,
@@ -472,42 +515,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '供应商': '药剂出入样例3',
   '经办人员': '药剂出入样例3',
   '单据状态': '药剂出入样例3'}],
-    "energy": [{'id': 1,
-  'status': '待填报',
-  'pending': True,
-  'abnormal': False,
-  '记录编号': 'ENER-0001',
-  '统计日期': '2026-09-01',
-  '用电量': '能耗管理样例1',
-  '单位电耗': '能耗管理样例1',
-  '药剂单耗': '能耗管理样例1',
-  '吨水电耗': '能耗管理样例1',
-  '记录人员': '能耗管理样例1',
-  '记录状态': '能耗管理样例1'},
- {'id': 2,
-  'status': '已填报',
-  'pending': True,
-  'abnormal': True,
-  '记录编号': 'ENER-0002',
-  '统计日期': '2026-09-02',
-  '用电量': '能耗管理样例2',
-  '单位电耗': '能耗管理样例2',
-  '药剂单耗': '能耗管理样例2',
-  '吨水电耗': '能耗管理样例2',
-  '记录人员': '能耗管理样例2',
-  '记录状态': '能耗管理样例2'},
- {'id': 3,
-  'status': '已复核',
-  'pending': False,
-  'abnormal': False,
-  '记录编号': 'ENER-0003',
-  '统计日期': '2026-09-03',
-  '用电量': '能耗管理样例3',
-  '单位电耗': '能耗管理样例3',
-  '药剂单耗': '能耗管理样例3',
-  '吨水电耗': '能耗管理样例3',
-  '记录人员': '能耗管理样例3',
-  '记录状态': '能耗管理样例3'}],
+    "energy": _energy_seed_rows(),
     "alarm": [{'id': 1,
   'status': '待确认',
   'pending': True,
